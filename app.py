@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import finnhub
+import requests
 
 st.set_page_config(page_title="Stock Signal Scanner", layout="wide", initial_sidebar_state="expanded")
 
@@ -16,8 +16,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-finnhub_key = st.secrets.get("FINNHUB_API_KEY", os.getenv("FINNHUB_API_KEY", ""))
-finnhub_client = finnhub.Client(api_key=finnhub_key) if finnhub_key else None
+FINNHUB_KEY = st.secrets.get("FINNHUB_API_KEY", os.getenv("FINNHUB_API_KEY", "da02ec1r01qgk75qq5v0da02ec1r01qgk75qq5vg"))
 
 DEFAULT_WATCHLIST = [
     "AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "META", "AMD",
@@ -25,6 +24,7 @@ DEFAULT_WATCHLIST = [
     "MARA", "IREN", "SOXL", "TQQQ", "APLD", "SPY", "QQQ", "URA", "HOOD", "SOFI"
 ]
 
+# --- Sidebar Controls ---
 st.sidebar.title("⚡ Stock Signal Scanner")
 horizon = st.sidebar.selectbox(
     "Trading Horizon",
@@ -40,29 +40,36 @@ if custom_ticker and custom_ticker not in watchlist:
 
 selected_ticker = st.sidebar.selectbox("Select Asset", watchlist, index=0)
 
-@st.cache_data(ttl=1800)
+# --- Finnhub Data Engine (Direct REST API) ---
+@st.cache_data(ttl=300)
 def get_finnhub_data(ticker):
     data = {
         "target_mean": None, "target_high": None, "target_low": None,
         "analyst_consensus": "N/A", "buy_ratings": 0, "hold_ratings": 0,
         "sell_ratings": 0, "insider_sentiment": "Neutral"
     }
-    if not finnhub_client:
+    
+    if not FINNHUB_KEY:
         return data
 
     try:
-        pt = finnhub_client.price_target(ticker)
-        if pt and pt.get("targetMean"):
-            data["target_mean"] = round(float(pt["targetMean"]), 2)
-            data["target_high"] = round(float(pt["targetHigh"]), 2)
-            data["target_low"] = round(float(pt["targetLow"]), 2)
+        # 1. Price Target
+        url_pt = f"https://finnhub.io/api/v1/stock/price-target?symbol={ticker}&token={FINNHUB_KEY}"
+        res_pt = requests.get(url_pt, timeout=5).json()
+        if res_pt and res_pt.get("targetMean"):
+            data["target_mean"] = round(float(res_pt["targetMean"]), 2)
+            data["target_high"] = round(float(res_pt.get("targetHigh", 0)), 2)
+            data["target_low"] = round(float(res_pt.get("targetLow", 0)), 2)
 
-        recs = finnhub_client.recommendation_trends(ticker)
-        if recs and len(recs) > 0:
-            latest = recs[0]
-            data["buy_ratings"] = latest.get("strongBuy", 0) + latest.get("buy", 0)
-            data["hold_ratings"] = latest.get("hold", 0)
-            data["sell_ratings"] = latest.get("sell", 0) + latest.get("strongSell", 0)
+        # 2. Analyst Recommendation Trends
+        url_rec = f"https://finnhub.io/api/v1/stock/recommendation?symbol={ticker}&token={FINNHUB_KEY}"
+        res_rec = requests.get(url_rec, timeout=5).json()
+        if isinstance(res_rec, list) and len(res_rec) > 0:
+            latest = res_rec[0]
+            data["buy_ratings"] = int(latest.get("strongBuy", 0) + latest.get("buy", 0))
+            data["hold_ratings"] = int(latest.get("hold", 0))
+            data["sell_ratings"] = int(latest.get("sell", 0) + latest.get("strongSell", 0))
+            
             if data["buy_ratings"] > (data["hold_ratings"] + data["sell_ratings"]):
                 data["analyst_consensus"] = "Bullish Consensus"
             elif data["sell_ratings"] > (data["buy_ratings"] + data["hold_ratings"]):
@@ -70,13 +77,15 @@ def get_finnhub_data(ticker):
             else:
                 data["analyst_consensus"] = "Neutral / Mixed"
 
-        sentiment = finnhub_client.stock_insider_sentiment(ticker, '2025-01-01', '2026-08-01')
-        if sentiment and sentiment.get("data") and len(sentiment["data"]) > 0:
-            latest_mspr = sentiment["data"][-1].get("mspr", 0)
-            if latest_mspr > 20:
-                data["insider_sentiment"] = "Net Insider Accumulation"
-            elif latest_mspr < -20:
-                data["insider_sentiment"] = "Insider Selling Pressure"
+        # 3. Insider Sentiment
+        url_ins = f"https://finnhub.io/api/v1/stock/insider-sentiment?symbol={ticker}&from=2025-01-01&token={FINNHUB_KEY}"
+        res_ins = requests.get(url_ins, timeout=5).json()
+        if res_ins and res_ins.get("data") and len(res_ins["data"]) > 0:
+            mspr = float(res_ins["data"][-1].get("mspr", 0))
+            if mspr > 10:
+                data["insider_sentiment"] = "Net Insider Buying"
+            elif mspr < -10:
+                data["insider_sentiment"] = "Net Insider Selling"
             else:
                 data["insider_sentiment"] = "Balanced"
     except Exception:
@@ -84,7 +93,8 @@ def get_finnhub_data(ticker):
 
     return data
 
-@st.cache_data(ttl=900)
+# --- Technical & Multi-Factor Engine ---
+@st.cache_data(ttl=300)
 def analyze_asset(ticker, horizon_mode):
     interval = "1d" if horizon_mode in ["short", "medium"] else "1wk"
     period = "1y" if horizon_mode == "short" else ("2y" if horizon_mode == "medium" else "5y")
@@ -172,7 +182,7 @@ def analyze_asset(ticker, horizon_mode):
         score -= 1.0
         drivers.append("Wall Street Consensus: Majority Sell Ratings")
 
-    if "Accumulation" in fh_data.get("insider_sentiment", ""):
+    if "Buying" in fh_data.get("insider_sentiment", ""):
         score += 1.0
         drivers.append("Finnhub Insider Signals: Net Insider Accumulation")
 

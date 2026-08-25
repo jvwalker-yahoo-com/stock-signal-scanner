@@ -34,7 +34,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 FINNHUB_KEY = st.secrets.get("FINNHUB_API_KEY", os.getenv("FINNHUB_API_KEY", "da02ec1r01qgk75qq5v0da02ec1r01qgk75qq5vg"))
-AGENT_HUB_BASE_URL = st.secrets.get("AGENT_HUB_URL", "https://trading-agents-hub.streamlit.app")
+AGENT_HUB_BASE_URL = st.secrets.get("AGENT_HUB_URL", "https://trading-agents-app-ct37xl3kkrvlt7r3iibenl.streamlit.app")
 
 DEFAULT_WATCHLIST = [
     "AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "META", "AMD",

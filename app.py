@@ -9,25 +9,22 @@ import requests
 
 st.set_page_config(page_title="Stock Signal Scanner", layout="wide", initial_sidebar_state="expanded")
 
-# Dark Terminal Styling with Blue Accents for Setup & Key Levels
+# Dark Terminal Styling with Blue Labels for Setup & Key Levels
 st.markdown("""
 <style>
     .reportview-container, .main, .block-container { background-color: #0b0e14; color: #f0f2f6; }
     div[data-testid="stSidebar"] { background-color: #111622; border-right: 1px solid #1e2638; }
     
-    /* Box & Card Styling */
     .card-box { background-color: #151c2c; border: 1px solid #1e293b; border-radius: 10px; padding: 14px; margin-bottom: 12px; }
-    .card-box-blue { background-color: #0f172a; border: 1px solid #1d4ed8; border-radius: 10px; padding: 14px; margin-bottom: 12px; }
     
-    /* Blue Font Styles */
-    .metric-title-blue { font-size: 0.8rem; color: #38bdf8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-weight: 600; }
-    .metric-value-blue { font-size: 1.4rem; font-weight: 700; color: #00d2ff; }
-    .metric-sub-blue { font-size: 0.75rem; color: #7dd3fc; margin-top: 2px; }
+    /* Blue Labels / Titles */
+    .metric-title-blue { font-size: 0.8rem; color: #38bdf8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-weight: 700; }
     
-    /* Standard Metric & Badge Helpers */
-    .metric-title { font-size: 0.8rem; color: #8b9bb4; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+    /* Standard White Values for High Legibility */
     .metric-value { font-size: 1.4rem; font-weight: 700; color: #ffffff; }
-    .metric-sub { font-size: 0.75rem; color: #6b7c96; margin-top: 2px; }
+    .metric-sub { font-size: 0.75rem; color: #b0bec5; margin-top: 2px; }
+    
+    .metric-title { font-size: 0.8rem; color: #8b9bb4; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
     .bias-bullish { color: #00e676; font-weight: bold; }
     .bias-bearish { color: #ff5252; font-weight: bold; }
     .badge-buy { background-color: #0d3829; color: #00e676; border: 1px solid #00e676; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; }
@@ -131,7 +128,6 @@ def analyze_daytrade(ticker, tf_str, rg_str):
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
-    # Indicator Computations
     df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
     cum_vol = df['Volume'].cumsum()
     cum_vol_price = (df['Volume'] * ((df['High'] + df['Low'] + df['Close']) / 3)).cumsum()
@@ -220,30 +216,27 @@ def analyze_daytrade(ticker, tf_str, rg_str):
 df, stats = analyze_daytrade(selected_ticker, timeframe, range_select)
 
 if stats:
-    st.markdown(f"## {stats['ticker']} <span style='font-size:1.1rem; color:#38bdf8;'>Day Trader</span>", unsafe_allow_html=True)
-    st.markdown(f"# <span style='color:#00d2ff;'>${stats['price']:.2f}</span>", unsafe_allow_html=True)
+    st.markdown(f"## {stats['ticker']} <span style='font-size:1.1rem; color:#8b9bb4;'>Day Trader</span>", unsafe_allow_html=True)
+    st.markdown(f"# ${stats['price']:.2f}")
     
-    # Intraday Pills
     p1, p2, p3, p4 = st.columns([1, 1.2, 1.5, 3])
     p1.button(f"{timeframe}", disabled=True)
     p2.button(f"VWAP: ${stats['vwap']:.2f}", disabled=True)
     p3.button(f"Session: ${stats['session_low']:.2f} - ${stats['session_high']:.2f}", disabled=True)
 
-    # Bias Box
     b_class = "bias-bullish" if stats["bias"] == "Bullish" else "bias-bearish"
     st.markdown(
         f"""
         <div class="card-box" style="margin-top:10px; width: 300px;">
             <div class="metric-title-blue">INTRADAY BIAS</div>
             <div class="{b_class}" style="font-size: 1.6rem;">{stats['bias']}</div>
-            <div class="metric-sub-blue">Bias score: {stats['bias_score']:.1f}</div>
+            <div class="metric-sub" style="color:#ffffff;">Bias score: {stats['bias_score']:.1f}</div>
         </div>
         """,
         unsafe_allow_html=True
     )
 
-    # Chart Section
-    st.markdown(f"##### <span style='color:#38bdf8;'>INTRADAY {timeframe.upper()} CHART • {stats['ticker']} (VWAP + EMA20, DASHED = LIQUIDITY)</span>", unsafe_allow_html=True)
+    st.markdown(f"##### INTRADAY {timeframe.upper()} CHART • {stats['ticker']} (VWAP + EMA20, DASHED = LIQUIDITY)")
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.75, 0.25])
     
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Price'), row=1, col=1)
@@ -259,47 +252,47 @@ if stats:
     fig.update_layout(template="plotly_dark", height=500, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10))
     st.plotly_chart(fig, use_container_width=True)
 
-    # 3. Setup Cards (Styled in Blue)
-    st.markdown(f"##### <span style='color:#38bdf8;'>SETUP • {stats['setup_type']}</span>", unsafe_allow_html=True)
+    # 3. Setup Cards (Blue Labels, Bright White Values)
+    st.markdown(f"##### SETUP • {stats['setup_type']}")
     s1, s2, s3 = st.columns(3)
     
     with s1:
         st.markdown(
             f"""
-            <div class="card-box-blue">
+            <div class="card-box">
                 <div class="metric-title-blue">ENTRY ZONE</div>
-                <div class="metric-value-blue">{stats['entry_zone']}</div>
-                <div class="metric-sub-blue">Pullback to VWAP / Market</div>
+                <div class="metric-value">{stats['entry_zone']}</div>
+                <div class="metric-sub">Pullback to VWAP / Market</div>
             </div>
             """, unsafe_allow_html=True
         )
     with s2:
         st.markdown(
             f"""
-            <div class="card-box-blue">
+            <div class="card-box">
                 <div class="metric-title-blue">STOP-LOSS</div>
-                <div class="metric-value-blue">${stats['stop_loss']:.2f}</div>
-                <div class="metric-sub-blue">Beyond structural pivot</div>
+                <div class="metric-value">${stats['stop_loss']:.2f}</div>
+                <div class="metric-sub">Beyond structural pivot</div>
             </div>
             """, unsafe_allow_html=True
         )
     with s3:
         st.markdown(
             f"""
-            <div class="card-box-blue">
+            <div class="card-box">
                 <div class="metric-title-blue">TARGET</div>
-                <div class="metric-value-blue">${stats['target']:.2f}</div>
-                <div class="metric-sub-blue">Liquidity / Measured move</div>
+                <div class="metric-value">${stats['target']:.2f}</div>
+                <div class="metric-sub">Liquidity / Measured move</div>
             </div>
             """, unsafe_allow_html=True
         )
 
-    # Risk Management Note (Styled in Blue)
+    # Risk Management Note
     st.markdown(
         f"""
-        <div class="card-box" style="border-left: 4px solid #00d2ff; background-color: #0f172a;">
+        <div class="card-box" style="border-left: 4px solid #2962ff;">
             <div class="metric-title-blue">RISK : REWARD &bull; 1 : {stats['rr_ratio']:.2f} (${stats['risk_dollars']:.2f} Risk / ${stats['reward_dollars']:.2f} Reward)</div>
-            <div style="font-size:0.85rem; color:#93c5fd; margin-top:4px;">
+            <div style="font-size:0.85rem; color:#ffffff; margin-top:4px;">
                 Risk 1-2% of capital per trade. Max daily loss 4-6% - stop trading after 2 consecutive losses. No averaging down - cut losers fast. Target reward:risk between 1.5:1 and 3:1.
             </div>
         </div>
@@ -307,33 +300,33 @@ if stats:
         unsafe_allow_html=True
     )
 
-    # 4. Key Levels Grid (Styled in Blue)
-    st.markdown("##### <span style='color:#38bdf8;'>KEY LEVELS</span>", unsafe_allow_html=True)
+    # 4. Key Levels Grid (Blue Labels, Bright White Values)
+    st.markdown("##### KEY LEVELS")
     k1, k2, k3 = st.columns(3)
     k4, k5, k6 = st.columns(3)
 
-    k1.markdown(f'<div class="card-box-blue"><div class="metric-title-blue">VWAP</div><div class="metric-value-blue">${stats["vwap"]:.2f}</div><div class="metric-sub-blue">Intraday Anchor</div></div>', unsafe_allow_html=True)
-    k2.markdown(f'<div class="card-box-blue"><div class="metric-title-blue">SESSION OPEN</div><div class="metric-value-blue">${stats["session_open"]:.2f}</div><div class="metric-sub-blue">Reference Open</div></div>', unsafe_allow_html=True)
-    k3.markdown(f'<div class="card-box-blue"><div class="metric-title-blue">SESSION HIGH</div><div class="metric-value-blue">${stats["session_high"]:.2f}</div><div class="metric-sub-blue">Buy-Side Liquidity</div></div>', unsafe_allow_html=True)
+    k1.markdown(f'<div class="card-box"><div class="metric-title-blue">VWAP</div><div class="metric-value">${stats["vwap"]:.2f}</div><div class="metric-sub">Intraday Anchor</div></div>', unsafe_allow_html=True)
+    k2.markdown(f'<div class="card-box"><div class="metric-title-blue">SESSION OPEN</div><div class="metric-value">${stats["session_open"]:.2f}</div><div class="metric-sub">Reference Open</div></div>', unsafe_allow_html=True)
+    k3.markdown(f'<div class="card-box"><div class="metric-title-blue">SESSION HIGH</div><div class="metric-value">${stats["session_high"]:.2f}</div><div class="metric-sub">Buy-Side Liquidity</div></div>', unsafe_allow_html=True)
 
-    k4.markdown(f'<div class="card-box-blue"><div class="metric-title-blue">SESSION LOW</div><div class="metric-value-blue">${stats["session_low"]:.2f}</div><div class="metric-sub-blue">Sell-Side Liquidity</div></div>', unsafe_allow_html=True)
-    k5.markdown(f'<div class="card-box-blue"><div class="metric-title-blue">PREV CLOSE</div><div class="metric-value-blue">${stats["prev_close"]:.2f}</div><div class="metric-sub-blue">Reference Pivot</div></div>', unsafe_allow_html=True)
-    k6.markdown(f'<div class="card-box-blue"><div class="metric-title-blue">LIQUIDITY ABOVE</div><div class="metric-value-blue">${stats["liq_above"]:.2f}</div><div class="metric-sub-blue">Pivot Highs</div></div>', unsafe_allow_html=True)
+    k4.markdown(f'<div class="card-box"><div class="metric-title-blue">SESSION LOW</div><div class="metric-value">${stats["session_low"]:.2f}</div><div class="metric-sub">Sell-Side Liquidity</div></div>', unsafe_allow_html=True)
+    k5.markdown(f'<div class="card-box"><div class="metric-title-blue">PREV CLOSE</div><div class="metric-value">${stats["prev_close"]:.2f}</div><div class="metric-sub">Reference Pivot</div></div>', unsafe_allow_html=True)
+    k6.markdown(f'<div class="card-box"><div class="metric-title-blue">LIQUIDITY ABOVE</div><div class="metric-value">${stats["liq_above"]:.2f}</div><div class="metric-sub">Pivot Highs</div></div>', unsafe_allow_html=True)
 
     # 5. Reasoning Breakdown
-    st.markdown("##### <span style='color:#38bdf8;'>REASONING</span>", unsafe_allow_html=True)
-    r_box = '<div class="card-box" style="border-left: 3px solid #38bdf8;">'
+    st.markdown("##### REASONING")
+    r_box = '<div class="card-box">'
     for item in stats['reasoning']:
-        r_box += f'<div style="margin-bottom:6px; font-size:0.9rem; color:#e2e8f0;">&bull; {item}</div>'
+        r_box += f'<div style="margin-bottom:6px; font-size:0.9rem; color:#ffffff;">&bull; {item}</div>'
     r_box += '</div>'
     st.markdown(r_box, unsafe_allow_html=True)
 
     # 6. Invalidation Box
-    st.markdown("##### <span style='color:#38bdf8;'>INVALIDATION • ALTERNATIVE</span>", unsafe_allow_html=True)
+    st.markdown("##### INVALIDATION • ALTERNATIVE")
     st.markdown(
         f"""
         <div class="card-box" style="border-left: 4px solid #ff5252;">
-            <span style="color:#ff5252; font-weight:bold;">Invalidation:</span> <span style="color:#e2e8f0;">{stats['invalidation']}</span>
+            <span style="color:#ff5252; font-weight:bold;">Invalidation:</span> <span style="color:#ffffff;">{stats['invalidation']}</span>
         </div>
         """,
         unsafe_allow_html=True

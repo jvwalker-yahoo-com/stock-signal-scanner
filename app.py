@@ -9,10 +9,20 @@ import requests
 
 st.set_page_config(page_title="Stock Signal Scanner", layout="wide", initial_sidebar_state="expanded")
 
+# Dark Terminal Styling matching the Screenshot
 st.markdown("""
 <style>
-    .reportview-container, .main, .block-container { background-color: #0e1117; color: #ffffff; }
-    .stMetric { background-color: #1a1f2c; padding: 12px; border-radius: 8px; border: 1px solid #2d3748; }
+    .reportview-container, .main, .block-container { background-color: #0b0e14; color: #f0f2f6; }
+    div[data-testid="stSidebar"] { background-color: #111622; border-right: 1px solid #1e2638; }
+    .card-box { background-color: #151c2c; border: 1px solid #222d44; border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+    .metric-title { font-size: 0.8rem; color: #8b9bb4; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+    .metric-value { font-size: 1.4rem; font-weight: 700; color: #ffffff; }
+    .metric-sub { font-size: 0.75rem; color: #6b7c96; margin-top: 2px; }
+    .bias-bullish { color: #00e676; font-weight: bold; }
+    .bias-bearish { color: #ff5252; font-weight: bold; }
+    .badge-buy { background-color: #0d3829; color: #00e676; border: 1px solid #00e676; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; }
+    .badge-sell { background-color: #3d141a; color: #ff5252; border: 1px solid #ff5252; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; }
+    .badge-hold { background-color: #3b3114; color: #ffd600; border: 1px solid #ffd600; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -24,238 +34,328 @@ DEFAULT_WATCHLIST = [
     "MARA", "IREN", "SOXL", "TQQQ", "APLD", "SPY", "QQQ", "URA", "HOOD", "SOFI"
 ]
 
-# --- Sidebar Controls ---
-st.sidebar.title("⚡ Stock Signal Scanner")
-horizon = st.sidebar.selectbox(
-    "Trading Horizon",
-    ["Short Term (1-3 Weeks)", "Medium Term (1-3 Months)", "Long Term (6-12 Months)"],
-    index=1
-)
-horizon_key = "short" if "Short" in horizon else ("medium" if "Medium" in horizon else "long")
+# --- Quick Watchlist State Helper ---
+if "watchlist" not in st.session_state:
+    st.session_state.watchlist = list(DEFAULT_WATCHLIST)
 
-custom_ticker = st.sidebar.text_input("Add Ticker to Scan", "").upper().strip()
-watchlist = list(DEFAULT_WATCHLIST)
-if custom_ticker and custom_ticker not in watchlist:
-    watchlist.insert(0, custom_ticker)
+# --- Top Navigation Bar ---
+top_c1, top_c2, top_c3, top_c4 = st.columns([3, 1.2, 1.2, 1.2])
+with top_c1:
+    st.markdown("### ⚡ Stock Signal Scanner")
+    st.caption("Candlestick structure analysis • Trend, momentum & buy/sell execution zones")
+with top_c2:
+    timeframe = st.selectbox("Interval", ["15 min", "5 min", "1 hour", "1 Day"], index=0)
+with top_c3:
+    range_select = st.selectbox("Lookback", ["5 Days", "1 Day", "1 Month", "1 Year"], index=0)
+with top_c4:
+    mode = st.radio("Trading Mode", ["Day Trader", "Swing Trader"], horizontal=True)
 
-selected_ticker = st.sidebar.selectbox("Select Asset", watchlist, index=0)
+# --- Watchlist Quick-Fetcher ---
+@st.cache_data(ttl=120)
+def get_watchlist_summary(tickers):
+    summaries = []
+    for sym in tickers:
+        try:
+            d = yf.download(sym, period="5d", interval="1d", progress=False)
+            if not d.empty:
+                if isinstance(d.columns, pd.MultiIndex):
+                    d.columns = d.columns.get_level_values(0)
+                cp = float(d['Close'].iloc[-1])
+                pp = float(d['Close'].iloc[-2]) if len(d) > 1 else cp
+                chg = ((cp - pp) / pp) * 100
+                
+                # Fast mini score
+                sma = float(d['Close'].rolling(5).mean().iloc[-1])
+                if cp > sma and chg > 0:
+                    badge = "BUY"
+                elif cp < sma and chg < 0:
+                    badge = "SELL"
+                else:
+                    badge = "HOLD"
+                    
+                summaries.append({"symbol": sym, "price": cp, "change": chg, "badge": badge})
+        except Exception:
+            continue
+    return summaries
 
-# --- Finnhub Data Engine (Direct REST API) ---
-@st.cache_data(ttl=300)
-def get_finnhub_data(ticker):
-    data = {
-        "target_mean": None, "target_high": None, "target_low": None,
-        "analyst_consensus": "N/A", "buy_ratings": 0, "hold_ratings": 0,
-        "sell_ratings": 0, "insider_sentiment": "Neutral"
-    }
+# --- Sidebar UI ---
+st.sidebar.markdown("### WATCHLIST")
+new_sym = st.sidebar.text_input("Add Ticker", "").upper().strip()
+if st.sidebar.button("+ Add Ticker") and new_sym:
+    if new_sym not in st.session_state.watchlist:
+        st.session_state.watchlist.insert(0, new_sym)
+
+selected_ticker = st.sidebar.selectbox("Select Asset to Inspect", st.session_state.watchlist, index=0)
+
+# Sidebar Mini Watchlist Display
+wl_data = get_watchlist_summary(st.session_state.watchlist[:16])
+for item in wl_data:
+    b_class = "badge-buy" if "BUY" in item["badge"] else ("badge-sell" if "SELL" in item["badge"] else "badge-hold")
+    color = "#00e676" if item["change"] >= 0 else "#ff5252"
+    sign = "+" if item["change"] >= 0 else ""
+    st.sidebar.markdown(
+        f"""
+        <div style="display:flex; justify-content:space-between; align-items:center; padding: 6px 0; border-bottom: 1px solid #1e2638;">
+            <div>
+                <b>{item['symbol']}</b><br>
+                <span class="{b_class}">{item['badge']}</span>
+            </div>
+            <div style="text-align:right;">
+                <span>${item['price']:.2f}</span><br>
+                <span style="color:{color}; font-size:0.8rem;">{sign}{item['change']:.2f}%</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+# --- Intraday & Day Trader Engine ---
+@st.cache_data(ttl=60)
+def analyze_daytrade(ticker, tf_str, rg_str):
+    interval_map = {"5 min": "5m", "15 min": "15m", "1 hour": "60m", "1 Day": "1d"}
+    range_map = {"1 Day": "1d", "5 Days": "5d", "1 Month": "1mo", "1 Year": "1y"}
     
-    if not FINNHUB_KEY:
-        return data
-
-    try:
-        # 1. Price Target
-        url_pt = f"https://finnhub.io/api/v1/stock/price-target?symbol={ticker}&token={FINNHUB_KEY}"
-        res_pt = requests.get(url_pt, timeout=5).json()
-        if res_pt and res_pt.get("targetMean"):
-            data["target_mean"] = round(float(res_pt["targetMean"]), 2)
-            data["target_high"] = round(float(res_pt.get("targetHigh", 0)), 2)
-            data["target_low"] = round(float(res_pt.get("targetLow", 0)), 2)
-
-        # 2. Analyst Recommendation Trends
-        url_rec = f"https://finnhub.io/api/v1/stock/recommendation?symbol={ticker}&token={FINNHUB_KEY}"
-        res_rec = requests.get(url_rec, timeout=5).json()
-        if isinstance(res_rec, list) and len(res_rec) > 0:
-            latest = res_rec[0]
-            data["buy_ratings"] = int(latest.get("strongBuy", 0) + latest.get("buy", 0))
-            data["hold_ratings"] = int(latest.get("hold", 0))
-            data["sell_ratings"] = int(latest.get("sell", 0) + latest.get("strongSell", 0))
-            
-            if data["buy_ratings"] > (data["hold_ratings"] + data["sell_ratings"]):
-                data["analyst_consensus"] = "Bullish Consensus"
-            elif data["sell_ratings"] > (data["buy_ratings"] + data["hold_ratings"]):
-                data["analyst_consensus"] = "Bearish Consensus"
-            else:
-                data["analyst_consensus"] = "Neutral / Mixed"
-
-        # 3. Insider Sentiment
-        url_ins = f"https://finnhub.io/api/v1/stock/insider-sentiment?symbol={ticker}&from=2025-01-01&token={FINNHUB_KEY}"
-        res_ins = requests.get(url_ins, timeout=5).json()
-        if res_ins and res_ins.get("data") and len(res_ins["data"]) > 0:
-            mspr = float(res_ins["data"][-1].get("mspr", 0))
-            if mspr > 10:
-                data["insider_sentiment"] = "Net Insider Buying"
-            elif mspr < -10:
-                data["insider_sentiment"] = "Net Insider Selling"
-            else:
-                data["insider_sentiment"] = "Balanced"
-    except Exception:
-        pass
-
-    return data
-
-# --- Technical & Multi-Factor Engine ---
-@st.cache_data(ttl=300)
-def analyze_asset(ticker, horizon_mode):
-    interval = "1d" if horizon_mode in ["short", "medium"] else "1wk"
-    period = "1y" if horizon_mode == "short" else ("2y" if horizon_mode == "medium" else "5y")
+    inv = interval_map.get(tf_str, "15m")
+    per = range_map.get(rg_str, "5d")
     
-    df = yf.download(ticker, period=period, interval=interval, progress=False)
+    df = yf.download(ticker, period=per, interval=inv, progress=False)
     if df.empty:
         return None, None
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
-    ma_fast_len = 20 if horizon_mode == "short" else 50
-    ma_slow_len = 50 if horizon_mode == "short" else 200
-    df['SMA_Fast'] = df['Close'].rolling(ma_fast_len).mean()
-    df['SMA_Slow'] = df['Close'].rolling(ma_slow_len).mean()
+    # 1. EMA 20
+    df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
 
-    delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    rs = gain / (loss + 1e-9)
-    df['RSI'] = 100 - (100 / (1 + rs))
+    # 2. Intraday VWAP
+    cum_vol = df['Volume'].cumsum()
+    cum_vol_price = (df['Volume'] * ((df['High'] + df['Low'] + df['Close']) / 3)).cumsum()
+    df['VWAP'] = cum_vol_price / (cum_vol + 1e-9)
 
-    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
-    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
-    df['MACD'] = ema12 - ema26
-    df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-    df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
-
+    # 3. ATR (14)
     tr = pd.concat([df['High'] - df['Low'], np.abs(df['High'] - df['Close'].shift()), np.abs(df['Low'] - df['Close'].shift())], axis=1).max(axis=1)
     df['ATR'] = tr.rolling(14).mean()
 
     last = df.iloc[-1]
     cur_p = round(float(last['Close']), 2)
-    atr_val = float(last['ATR'])
+    vwap_val = round(float(last['VWAP']), 2)
+    ema20_val = round(float(last['EMA20']), 2)
+    atr_val = round(float(last['ATR']), 2) if not np.isnan(last['ATR']) else 0.5
 
-    score = 0.0
-    drivers = []
+    # Session Stats
+    session_open = round(float(df['Open'].iloc[-1]), 2)
+    session_high = round(float(df['High'].tail(16).max()), 2)
+    session_low = round(float(df['Low'].tail(16).min()), 2)
+    prev_close = round(float(df['Close'].iloc[-2]), 2) if len(df) > 1 else cur_p
 
-    if last['Close'] > last['SMA_Fast']:
-        score += 1.5
-        drivers.append(f"Price above {ma_fast_len}-day SMA")
-    else:
-        score -= 1.5
-        drivers.append(f"Price below {ma_fast_len}-day SMA")
+    # Liquidity Zones (Local swing points)
+    liq_above = round(float(df['High'].tail(30).max()), 2)
+    liq_below = round(float(df['Low'].tail(30).min()), 2)
 
-    if last['SMA_Fast'] > last['SMA_Slow']:
-        score += 1.5
-        drivers.append(f"SMA{ma_fast_len} > SMA{ma_slow_len} (Macro Uptrend)")
-    else:
-        score -= 1.5
-        drivers.append(f"SMA{ma_fast_len} < SMA{ma_slow_len} (Macro Downtrend)")
-
-    rsi_val = float(last['RSI'])
-    if rsi_val >= 60:
-        score += 1.5
-        drivers.append(f"RSI {rsi_val:.1f} Bullish Momentum")
-    elif rsi_val <= 40:
-        score -= 1.5
-        drivers.append(f"RSI {rsi_val:.1f} Bearish Momentum")
-    else:
-        drivers.append(f"RSI {rsi_val:.1f} Neutral Consolidation")
-
-    if last['MACD'] > last['MACD_Signal']:
-        score += 1.5
-        drivers.append("MACD > Signal (Bullish Momentum)")
-    else:
-        score -= 1.5
-        drivers.append("MACD < Signal (Bearish Momentum)")
-
-    fh_data = get_finnhub_data(ticker)
-    if fh_data.get("target_mean"):
-        upside = ((fh_data["target_mean"] - cur_p) / cur_p) * 100
-        if upside > 15:
-            score += 2.0
-            drivers.append(f"Wall St. Target: ${fh_data['target_mean']} (+{upside:.1f}% Upside)")
-        elif upside < -5:
-            score -= 2.0
-            drivers.append(f"Wall St. Target: ${fh_data['target_mean']} ({upside:.1f}% Downside)")
-        else:
-            drivers.append(f"Wall St. Target: ${fh_data['target_mean']} (Fair Value)")
-
-    if "Bullish" in fh_data.get("analyst_consensus", ""):
-        score += 1.0
-        drivers.append(f"Wall Street Consensus: {fh_data['buy_ratings']} Buys vs {fh_data['sell_ratings']} Sells")
-    elif "Bearish" in fh_data.get("analyst_consensus", ""):
-        score -= 1.0
-        drivers.append("Wall Street Consensus: Majority Sell Ratings")
-
-    if "Buying" in fh_data.get("insider_sentiment", ""):
-        score += 1.0
-        drivers.append("Finnhub Insider Signals: Net Insider Accumulation")
-
-    score = round(max(-10.0, min(10.0, score)), 1)
-    if score >= 6.0: rating = "STRONG BUY"
-    elif score >= 2.0: rating = "BUY"
-    elif score <= -6.0: rating = "STRONG SELL"
-    elif score <= -2.0: rating = "SELL"
-    else: rating = "HOLD"
-
-    lookback = 30 if horizon_mode == "short" else (60 if horizon_mode == "medium" else 120)
-    support = round(float(df['Low'].tail(lookback).min()), 2)
-    resistance = fh_data["target_mean"] if fh_data.get("target_mean") and fh_data["target_mean"] > cur_p else round(float(df['High'].tail(lookback).max()), 2)
+    # Bias Logic
+    bias_score = 0.0
+    reasoning = []
     
-    atr_mult = 1.0 if horizon_mode == "short" else (2.0 if horizon_mode == "medium" else 3.0)
-    buy_zone_upper = round(support + (atr_mult * atr_val), 2)
-    stop_loss = round(support - (0.5 * atr_mult * atr_val), 2)
-    
-    risk = max(cur_p - stop_loss, 0.01)
-    reward = max(resistance - cur_p, 0.01)
+    if cur_p < vwap_val:
+        bias_score -= 1.0
+        reasoning.append(f"Price trading below session VWAP (${vwap_val:.2f})")
+    else:
+        bias_score += 1.0
+        reasoning.append(f"Price trading above session VWAP (${vwap_val:.2f})")
+
+    if cur_p < ema20_val:
+        bias_score -= 1.0
+        reasoning.append(f"Price below 15m EMA20 (${ema20_val:.2f})")
+    else:
+        bias_score += 1.0
+        reasoning.append(f"Price above 15m EMA20 (${ema20_val:.2f})")
+
+    # Trend of VWAP
+    if df['VWAP'].iloc[-1] >= df['VWAP'].iloc[-5]:
+        reasoning.append("VWAP sloping upward over the lookback")
+    else:
+        reasoning.append("VWAP sloping downward over the lookback")
+
+    if bias_score <= -1.0:
+        bias = "Bearish"
+        bias_color = "red"
+        setup_type = "BEARISH"
+        entry_zone = f"${vwap_val:.2f} - ${cur_p:.2f}"
+        stop_loss = round(liq_above + (0.5 * atr_val), 2)
+        target = round(liq_below, 2)
+        invalidation = f"Plan invalid if price closes above ${stop_loss:.2f}"
+        reasoning.append("Bearish break of structure - close below recent intraday pivot")
+    else:
+        bias = "Bullish"
+        bias_color = "green"
+        setup_type = "BULLISH"
+        entry_zone = f"${cur_p:.2f} - ${vwap_val:.2f}"
+        stop_loss = round(liq_below - (0.5 * atr_val), 2)
+        target = round(liq_above, 2)
+        invalidation = f"Plan invalid if price closes below ${stop_loss:.2f}"
+        reasoning.append("Bullish break of structure - reclaim of session VWAP pivot")
+
+    reasoning.append(f"Buy-side liquidity (pivot highs) overhead at ${liq_above:.2f}")
+    reasoning.append(f"Sell-side liquidity (pivot lows) below at ${liq_below:.2f}")
+    reasoning.append(f"Session range ${session_high:.2f} - ${session_low:.2f} (Open: ${session_open:.2f})")
+    reasoning.append(f"Previous close ${prev_close:.2f} acts as reference / liquidity pivot")
+    reasoning.append(f"15m ATR ~${atr_val:.2f} - size so stop distance is 1-2% of total risk capital")
+
+    risk = max(abs(cur_p - stop_loss), 0.05)
+    reward = max(abs(target - cur_p), 0.05)
     rr_ratio = round(reward / risk, 2)
 
     return df, {
-        "ticker": ticker, "price": cur_p, "rating": rating, "score": score,
-        "rsi": rsi_val, "buy_zone": f"${support:.2f} - ${buy_zone_upper:.2f}",
-        "target": f"${resistance:.2f}", "stop_loss": f"${stop_loss:.2f}",
-        "risk_reward": f"1 : {rr_ratio}", "support": support, "resistance": resistance,
-        "buy_zone_upper": buy_zone_upper, "finnhub": fh_data, "drivers": drivers
+        "ticker": ticker,
+        "price": cur_p,
+        "bias": bias,
+        "bias_score": abs(bias_score) + 1.5,
+        "bias_color": bias_color,
+        "vwap": vwap_val,
+        "ema20": ema20_val,
+        "session_open": session_open,
+        "session_high": session_high,
+        "session_low": session_low,
+        "prev_close": prev_close,
+        "liq_above": liq_above,
+        "liq_below": liq_below,
+        "setup_type": setup_type,
+        "entry_zone": entry_zone,
+        "stop_loss": stop_loss,
+        "target": target,
+        "rr_ratio": rr_ratio,
+        "risk_dollars": round(risk, 2),
+        "reward_dollars": round(reward, 2),
+        "invalidation": invalidation,
+        "reasoning": reasoning
     }
 
-df, stats = analyze_asset(selected_ticker, horizon_key)
+# --- Main Dashboard Execution ---
+df, stats = analyze_daytrade(selected_ticker, timeframe, range_select)
 
 if stats:
-    st.header(f"{stats['ticker']} — ${stats['price']:.2f} USD")
+    # 1. Top Section
+    st.markdown(f"## {stats['ticker']} <span style='font-size:1.1rem; color:#8b9bb4;'>Day Trader</span>", unsafe_allow_html=True)
+    st.markdown(f"# ${stats['price']:.2f}")
     
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Signal Rating", stats['rating'])
-    col2.metric("Composite Score", f"{stats['score']} / 10")
-    col3.metric("RSI (14)", f"{stats['rsi']:.1f}")
-    col4.metric("Risk / Reward", stats['risk_reward'])
+    # Intraday Pills
+    p1, p2, p3, p4 = st.columns([1, 1.2, 1.5, 3])
+    p1.button(f"{timeframe}", disabled=True)
+    p2.button(f"VWAP: ${stats['vwap']:.2f}", disabled=True)
+    p3.button(f"Session: ${stats['session_low']:.2f} - ${stats['session_high']:.2f}", disabled=True)
 
-    fh = stats["finnhub"]
-    st.subheader("🏛️ Institutional & Analyst Intelligence (Finnhub)")
-    f1, f2, f3 = st.columns(3)
-    f1.metric("Wall St. Target", f"${fh['target_mean']}" if fh.get('target_mean') else "N/A", f"High: ${fh['target_high']} | Low: ${fh['target_low']}" if fh.get('target_high') else None)
-    f2.metric("Analyst Consensus", fh['analyst_consensus'], f"{fh['buy_ratings']} Buys | {fh['hold_ratings']} Holds | {fh['sell_ratings']} Sells")
-    f3.metric("Insider Sentiment", fh['insider_sentiment'])
+    # Bias Box
+    b_class = "bias-bullish" if stats["bias"] == "Bullish" else "bias-bearish"
+    st.markdown(
+        f"""
+        <div class="card-box" style="margin-top:10px; width: 300px;">
+            <div class="metric-title">INTRADAY BIAS</div>
+            <div class="{b_class}" style="font-size: 1.6rem;">{stats['bias']}</div>
+            <div class="metric-sub">Bias score: {stats['bias_score']:.1f}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
-    st.subheader("🎯 Position Parameters")
-    r1, r2, r3 = st.columns(3)
-    r1.info(f"**Accumulation Zone:**\n{stats['buy_zone']}")
-    r2.success(f"**Target Objective:**\n{stats['target']}")
-    r3.error(f"**Structural Stop-Loss:**\n{stats['stop_loss']}")
-
-    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.6, 0.2, 0.2])
+    # 2. Intraday Chart Section
+    st.markdown(f"##### INTRADAY {timeframe.upper()} CHART • {stats['ticker']} (VWAP + EMA20, DASHED = LIQUIDITY)")
+    
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.75, 0.25])
+    
+    # Candlestick
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Price'), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['SMA_Fast'], line=dict(color='orange', width=1.5), name='Fast SMA'), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['SMA_Slow'], line=dict(color='purple', width=1.5), name='Slow SMA'), row=1, col=1)
-    fig.add_hrect(y0=stats['support'], y1=stats['buy_zone_upper'], fillcolor="green", opacity=0.15, line_width=0, row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], line=dict(color='#ffab00', width=1.5), name='VWAP'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['EMA20'], line=dict(color='#00d2ff', width=1.2), name='EMA 20'), row=1, col=1)
+    
+    # Liquidity Levels (Dashed)
+    fig.add_hline(y=stats['liq_above'], line_dash="dash", line_color="#ff5252", annotation_text="Liquidity Above", row=1, col=1)
+    fig.add_hline(y=stats['liq_below'], line_dash="dash", line_color="#00e676", annotation_text="Liquidity Below", row=1, col=1)
 
-    fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='#00d2ff', width=1.5), name='RSI'), row=2, col=1)
-    fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
-    fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
+    # Volume
+    colors = ['#00e676' if row['Close'] >= row['Open'] else '#ff5252' for _, row in df.iterrows()]
+    fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=colors, name='Volume'), row=2, col=1)
 
-    fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], line=dict(color='#2962FF', width=1), name='MACD'), row=3, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['MACD_Signal'], line=dict(color='#FF6D00', width=1), name='Signal'), row=3, col=1)
-    fig.add_trace(go.Bar(x=df.index, y=df['MACD_Hist'], name='Hist'), row=3, col=1)
-
-    fig.update_layout(template="plotly_dark", height=650, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10))
+    fig.update_layout(template="plotly_dark", height=500, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10))
     st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("🔍 Decision Drivers")
-    for d in stats['drivers']:
-        st.markdown(f"- {d}")
+    # 3. Setup Cards
+    st.markdown(f"##### SETUP • {stats['setup_type']}")
+    s1, s2, s3 = st.columns(3)
+    
+    with s1:
+        st.markdown(
+            f"""
+            <div class="card-box">
+                <div class="metric-title">ENTRY ZONE</div>
+                <div class="metric-value">{stats['entry_zone']}</div>
+                <div class="metric-sub">Pullback to VWAP / Market</div>
+            </div>
+            """, unsafe_allow_html=True
+        )
+    with s2:
+        st.markdown(
+            f"""
+            <div class="card-box">
+                <div class="metric-title">STOP-LOSS</div>
+                <div class="metric-value">${stats['stop_loss']:.2f}</div>
+                <div class="metric-sub">Beyond structural pivot</div>
+            </div>
+            """, unsafe_allow_html=True
+        )
+    with s3:
+        st.markdown(
+            f"""
+            <div class="card-box">
+                <div class="metric-title">TARGET</div>
+                <div class="metric-value">${stats['target']:.2f}</div>
+                <div class="metric-sub">Liquidity / Measured move</div>
+            </div>
+            """, unsafe_allow_html=True
+        )
+
+    # Risk Management Note
+    st.markdown(
+        f"""
+        <div class="card-box" style="border-left: 4px solid #2962ff;">
+            <div class="metric-title">RISK : REWARD &bull; 1 : {stats['rr_ratio']:.2f} (${stats['risk_dollars']:.2f} Risk / ${stats['reward_dollars']:.2f} Reward)</div>
+            <div style="font-size:0.85rem; color:#b0bec5; margin-top:4px;">
+                Risk 1-2% of capital per trade. Max daily loss 4-6% - stop trading after 2 consecutive losses. No averaging down - cut losers fast. Target reward:risk between 1.5:1 and 3:1.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # 4. Key Levels Grid
+    st.markdown("##### KEY LEVELS")
+    k1, k2, k3 = st.columns(3)
+    k4, k5, k6 = st.columns(3)
+
+    k1.markdown(f'<div class="card-box"><div class="metric-title">VWAP</div><div class="metric-value">${stats["vwap"]:.2f}</div><div class="metric-sub">Intraday Anchor</div></div>', unsafe_allow_html=True)
+    k2.markdown(f'<div class="card-box"><div class="metric-title">SESSION OPEN</div><div class="metric-value">${stats["session_open"]:.2f}</div><div class="metric-sub">Reference Open</div></div>', unsafe_allow_html=True)
+    k3.markdown(f'<div class="card-box"><div class="metric-title">SESSION HIGH</div><div class="metric-value">${stats["session_high"]:.2f}</div><div class="metric-sub">Buy-Side Liquidity</div></div>', unsafe_allow_html=True)
+
+    k4.markdown(f'<div class="card-box"><div class="metric-title">SESSION LOW</div><div class="metric-value">${stats["session_low"]:.2f}</div><div class="metric-sub">Sell-Side Liquidity</div></div>', unsafe_allow_html=True)
+    k5.markdown(f'<div class="card-box"><div class="metric-title">PREV CLOSE</div><div class="metric-value">${stats["prev_close"]:.2f}</div><div class="metric-sub">Reference Pivot</div></div>', unsafe_allow_html=True)
+    k6.markdown(f'<div class="card-box"><div class="metric-title">LIQUIDITY ABOVE</div><div class="metric-value">${stats["liq_above"]:.2f}</div><div class="metric-sub">Pivot Highs</div></div>', unsafe_allow_html=True)
+
+    # 5. Reasoning Breakdown
+    st.markdown("##### REASONING")
+    r_box = '<div class="card-box">'
+    for item in stats['reasoning']:
+        r_box += f'<div style="margin-bottom:6px; font-size:0.9rem;">&bull; {item}</div>'
+    r_box += '</div>'
+    st.markdown(r_box, unsafe_allow_html=True)
+
+    # 6. Invalidation Box
+    st.markdown("##### INVALIDATION • ALTERNATIVE")
+    st.markdown(
+        f"""
+        <div class="card-box" style="border-left: 4px solid #ff5252;">
+            <span style="color:#ff5252; font-weight:bold;">Invalidation:</span> {stats['invalidation']}
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 else:
-    st.error("Unable to load data. Please check ticker.")
+    st.error(f"Could not load intraday data for {selected_ticker}. Please verify ticker.")

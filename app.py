@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
 from dotenv import load_dotenv
+from wyckoff import detect_wyckoff_structure
 
 load_dotenv()
 
@@ -250,7 +251,7 @@ for item in get_watchlist_summary(st.session_state.watchlist[:16]):
     """, unsafe_allow_html=True)
 
 # Multi-Feed Confluence Synthesis Engine
-def synthesize_multi_feed_signals(tech_score, cur_p, vwap_val, ema20_val, atr_val, liq_above, liq_below, insider_trades, congress_trades, inst_holdings, news_items):
+def synthesize_multi_feed_signals(tech_score, cur_p, vwap_val, ema20_val, atr_val, liq_above, liq_below, insider_trades, congress_trades, inst_holdings, news_items, wyckoff_data=None):
     # 1. OpenInsider Form 4
     insider_buys = [t for t in insider_trades if t.get("is_buy")]
     insider_sells = [t for t in insider_trades if t.get("is_sale")]
@@ -290,8 +291,27 @@ def synthesize_multi_feed_signals(tech_score, cur_p, vwap_val, ema20_val, atr_va
     news_mod = 0.5 if (pos_hits > neg_hits and pos_hits >= 2) else (-0.5 if (neg_hits > pos_hits and neg_hits >= 2) else 0.0)
     news_note = "News: Positive catalyst drivers detected" if news_mod > 0 else ("News: Headline risk / headwind drivers detected" if news_mod < 0 else "News: Macro headlines balanced")
 
+    # 5. Wyckoff Range Engine Factor
+    wyckoff_mod = 0.0
+    wyckoff_note = "Wyckoff Structure: Baseline range"
+    if wyckoff_data:
+        if wyckoff_data.get("has_spring"):
+            wyckoff_mod = 1.2
+            wyckoff_note = f"Wyckoff: Confirmed Spring Sweep (Score {wyckoff_data.get('spring_score')}/100, Phase C)"
+        elif wyckoff_data.get("has_utad"):
+            wyckoff_mod = -1.2
+            wyckoff_note = f"Wyckoff: Confirmed UTAD Upthrust Rejection (Score {wyckoff_data.get('utad_score')}/100, Phase C)"
+        elif wyckoff_data.get("has_sos"):
+            wyckoff_mod = 1.0
+            wyckoff_note = "Wyckoff: Sign of Strength (SOS) Breakout confirmed (Phase D/E)"
+        elif wyckoff_data.get("has_sow"):
+            wyckoff_mod = -1.0
+            wyckoff_note = "Wyckoff: Sign of Weakness (SOW) Breakdown confirmed (Phase D/E)"
+        else:
+            wyckoff_note = f"Wyckoff: {wyckoff_data.get('phase', 'Range Bound')}"
+
     # Composite Synthesis & Setup Classification
-    flow_composite = insider_mod + congress_mod + inst_mod + news_mod
+    flow_composite = insider_mod + congress_mod + inst_mod + news_mod + wyckoff_mod
     total_score = tech_score + flow_composite
     
     is_tech_bullish = (tech_score >= 0)
@@ -302,34 +322,34 @@ def synthesize_multi_feed_signals(tech_score, cur_p, vwap_val, ema20_val, atr_va
         bias = "Strong Bullish"
         setup_type = "BULLISH CONFLUENCE • SMART MONEY CONFIRMED"
         entry_zone = f"${cur_p:.2f} - ${vwap_val:.2f}"
-        stop_loss = round(liq_below - (0.5 * atr_val), 2)
-        target = round(liq_above + (0.5 * atr_val), 2)  # Expanded target on smart money confirmation
+        stop_loss = wyckoff_data.get("stop_loss", round(liq_below - (0.5 * atr_val), 2)) if wyckoff_data else round(liq_below - (0.5 * atr_val), 2)
+        target = wyckoff_data.get("tp2", round(liq_above + (0.5 * atr_val), 2)) if wyckoff_data else round(liq_above + (0.5 * atr_val), 2)
         invalidation = f"Plan invalid if price breaks below ${stop_loss:.2f} or Form 4 insider dumping accelerates"
-        action_verdict = "HIGH CONVICTION BUY (FLOW SUPPORTED)"
+        action_verdict = "HIGH CONVICTION BUY (FLOW & WYCKOFF CONFIRMED)"
     elif is_tech_bullish and is_flow_bearish:
         bias = "Cautious Bullish"
         setup_type = "CAUTION BUY • DISTRIBUTION DIVERGENCE"
         entry_zone = f"${cur_p:.2f} - ${(cur_p + vwap_val)/2:.2f}"
         stop_loss = round(cur_p - (0.75 * atr_val), 2)  # Tighter stop due to smart money divergence!
         target = round(liq_above, 2)
-        invalidation = f"HIGH ALERT: Price rising into insider/congress selling. Tight invalidation at ${stop_loss:.2f}"
+        invalidation = f"HIGH ALERT: Price rising into insider selling / UTAD. Invalidation at ${stop_loss:.2f}"
         action_verdict = "REDUCE SIZE / TIGHTEN STOPS (DIVERGENCE WARNING)"
     elif not is_tech_bullish and is_flow_bearish:
         bias = "Strong Bearish"
         setup_type = "BEARISH CONFLUENCE • INSTITUTIONAL LIQUIDATION"
         entry_zone = f"${vwap_val:.2f} - ${cur_p:.2f}"
-        stop_loss = round(liq_above + (0.5 * atr_val), 2)
-        target = round(liq_below - (0.5 * atr_val), 2)  # Expanded downside target
+        stop_loss = wyckoff_data.get("stop_loss", round(liq_above + (0.5 * atr_val), 2)) if wyckoff_data else round(liq_above + (0.5 * atr_val), 2)
+        target = wyckoff_data.get("tp2", round(liq_below - (0.5 * atr_val), 2)) if wyckoff_data else round(liq_below - (0.5 * atr_val), 2)
         invalidation = f"Plan invalid if price reclaims VWAP above ${stop_loss:.2f}"
         action_verdict = "SHORT / HEDGE WITH INSTITUTIONAL FLOW"
     elif not is_tech_bullish and is_flow_bullish:
         bias = "Reversal Watch"
         setup_type = "ACCUMULATION DIVERGENCE (SPRING / VALUE TRAP)"
         entry_zone = f"${cur_p:.2f} - ${liq_below:.2f}"
-        stop_loss = round(liq_below - (0.75 * atr_val), 2)
+        stop_loss = wyckoff_data.get("stop_loss", round(liq_below - (0.75 * atr_val), 2)) if wyckoff_data else round(liq_below - (0.75 * atr_val), 2)
         target = round(vwap_val, 2)
         invalidation = f"Watch for liquidity sweep. Invalidation if price breaks below ${stop_loss:.2f}"
-        action_verdict = "WATCH REVERSAL (INSIDERS BUYING THE DIP)"
+        action_verdict = "WATCH REVERSAL (SPRING & INSIDERS ACCUMULATING)"
     else:
         bias = "Bullish" if is_tech_bullish else "Bearish"
         setup_type = "TACTICAL SETUP"
@@ -341,6 +361,10 @@ def synthesize_multi_feed_signals(tech_score, cur_p, vwap_val, ema20_val, atr_va
 
     score_10 = min(10.0, max(1.0, round(5.0 + total_score, 1)))
 
+    tp1 = wyckoff_data.get("tp1", target) if wyckoff_data else target
+    tp2 = wyckoff_data.get("tp2", round(target * 1.02, 2)) if wyckoff_data else target
+    tp3 = wyckoff_data.get("tp3", round(target * 1.05, 2)) if wyckoff_data else target
+
     return {
         "bias": bias,
         "setup_type": setup_type,
@@ -349,15 +373,19 @@ def synthesize_multi_feed_signals(tech_score, cur_p, vwap_val, ema20_val, atr_va
         "entry_zone": entry_zone,
         "stop_loss": stop_loss,
         "target": target,
+        "tp1": tp1,
+        "tp2": tp2,
+        "tp3": tp3,
         "invalidation": invalidation,
         "action_verdict": action_verdict,
-        "notes": [insider_note, congress_note, inst_note, news_note],
+        "notes": [insider_note, congress_note, inst_note, news_note, wyckoff_note],
         "factors": {
             "Technicals": round(tech_score, 1),
             "Form 4 Insiders": round(insider_mod, 1),
             "Congress": round(congress_mod, 1),
             "13F Ownership": round(inst_mod, 1),
-            "News Catalysts": round(news_mod, 1)
+            "News Catalysts": round(news_mod, 1),
+            "Wyckoff Range": round(wyckoff_mod, 1)
         }
     }
 
@@ -407,17 +435,19 @@ def analyze_daytrade(ticker, tf_str, rg_str):
 df, raw_stats = analyze_daytrade(selected_ticker, timeframe, range_select)
 
 if raw_stats:
-    # Fetch Multi-Source Intelligence Feeds
+    # Fetch Multi-Source Intelligence Feeds & Wyckoff Structural Engine
     insider_trades = fetch_openinsider_trades(selected_ticker)
     congress_trades = fetch_quiver_congress_trades(selected_ticker)
     inst_holdings = fetch_finnhub_13f_holdings(selected_ticker)
     news_items = fetch_news_radar(selected_ticker)
+    wyckoff_data = detect_wyckoff_structure(df)
 
-    # Multi-Feed Synthesis Execution
+    # Multi-Feed & Wyckoff Confluence Synthesis
     synthesis = synthesize_multi_feed_signals(
         raw_stats["tech_score"], raw_stats["price"], raw_stats["vwap"],
         raw_stats["ema20"], raw_stats["atr"], raw_stats["liq_above"],
-        raw_stats["liq_below"], insider_trades, congress_trades, inst_holdings, news_items
+        raw_stats["liq_below"], insider_trades, congress_trades, inst_holdings, news_items,
+        wyckoff_data=wyckoff_data
     )
 
     risk = max(abs(raw_stats["price"] - synthesis["stop_loss"]), 0.05)
@@ -451,14 +481,14 @@ if raw_stats:
     r1, r2, r3, r4 = st.columns(4)
     r1.markdown(f'<div class="card-box"><div class="metric-title-blue">SYNTHESIZED BIAS</div><div style="font-size:1.35rem; font-weight:700; color:{b_color};">{synthesis["bias"]}</div><div class="metric-sub">{synthesis["action_verdict"]}</div></div>', unsafe_allow_html=True)
     r2.markdown(f'<div class="card-box"><div class="metric-title-blue">CONFLUENCE SCORE</div><div class="metric-value">{synthesis["composite_score"]} <span style="font-size:0.9rem; color:#94a3b8;">/ 10</span></div><div class="metric-sub">Multi-factor grade</div></div>', unsafe_allow_html=True)
-    r3.markdown(f'<div class="card-box"><div class="metric-title-blue">FLOW IMPACT</div><div class="metric-value" style="color:{"#00e676" if synthesis["flow_composite"] > 0 else ("#ff5252" if synthesis["flow_composite"] < 0 else "#ffffff")};">{synthesis["flow_composite"]:+} pts</div><div class="metric-sub">Insiders + Congress + 13F</div></div>', unsafe_allow_html=True)
+    r3.markdown(f'<div class="card-box"><div class="metric-title-blue">FLOW & WYCKOFF IMPACT</div><div class="metric-value" style="color:{"#00e676" if synthesis["flow_composite"] > 0 else ("#ff5252" if synthesis["flow_composite"] < 0 else "#ffffff")};">{synthesis["flow_composite"]:+} pts</div><div class="metric-sub">Insiders + Congress + Wyckoff</div></div>', unsafe_allow_html=True)
     r4.markdown(f'<div class="card-box"><div class="metric-title-blue">RISK : REWARD</div><div class="metric-value">1 : {rr_ratio:.2f}</div><div class="metric-sub">${risk:.2f} Risk / ${reward:.2f} Reward</div></div>', unsafe_allow_html=True)
 
     # Factor Breakdown Matrix
     with st.expander("📊 Multi-Factor Confluence Breakdown (Feed Point Attribution)", expanded=True):
-        fb_cols = st.columns(5)
+        fb_cols = st.columns(6)
         for idx, (factor_name, pts) in enumerate(synthesis["factors"].items()):
-            col = fb_cols[idx % 5]
+            col = fb_cols[idx % 6]
             f_col = "#00e676" if pts > 0 else ("#ff5252" if pts < 0 else "#94a3b8")
             col.markdown(f"""
                 <div style="background:#111622; border:1px solid #1e293b; border-radius:8px; padding:8px; text-align:center;">
@@ -467,25 +497,70 @@ if raw_stats:
                 </div>
             """, unsafe_allow_html=True)
 
-    # Chart Section
-    st.markdown(f"##### INTRADAY {timeframe.upper()} CHART • {selected_ticker} (VWAP + EMA20, DASHED = LIQUIDITY)")
+    # Chart Section with Wyckoff Overlays
+    st.markdown(f"##### INTRADAY {timeframe.upper()} CHART • {selected_ticker} (WYCKOFF RANGE + VWAP + EMA20)")
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.75, 0.25])
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Price'), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], line=dict(color='#ffab00', width=1.5), name='VWAP'), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['EMA20'], line=dict(color='#00d2ff', width=1.2), name='EMA 20'), row=1, col=1)
-    fig.add_hline(y=raw_stats['liq_above'], line_dash="dash", line_color="#ff5252", annotation_text="Liquidity Above", row=1, col=1)
-    fig.add_hline(y=raw_stats['liq_below'], line_dash="dash", line_color="#00e676", annotation_text="Liquidity Below", row=1, col=1)
+    
+    # Wyckoff Range Overlay Lines
+    if wyckoff_data:
+        tr_h = wyckoff_data.get("tr_high")
+        tr_l = wyckoff_data.get("tr_low")
+        if tr_h and tr_l:
+            fig.add_hline(y=tr_h, line_dash="dash", line_color="#ef4444", annotation_text=f"Creek (TR High: ${tr_h})", row=1, col=1)
+            fig.add_hline(y=tr_l, line_dash="dash", line_color="#10b981", annotation_text=f"Ice (TR Low: ${tr_l})", row=1, col=1)
+        
+        # Wyckoff Event Markers Annotations
+        for ev in wyckoff_data.get("events", []):
+            e_col = "#34d399" if ev.get("type") == "bullish" else "#f87171"
+            fig.add_annotation(
+                x=ev["idx"], y=ev["price"],
+                text=ev["name"],
+                showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=1.5,
+                arrowcolor=e_col, bgcolor="#1e293b", bordercolor=e_col,
+                font=dict(size=9, color="#ffffff"),
+                row=1, col=1
+            )
+        
+        # Take Profit Target Overlays
+        fig.add_hline(y=synthesis["tp1"], line_dash="dot", line_color="#38bdf8", annotation_text=f"TP1 (1R: ${synthesis['tp1']:.2f})", row=1, col=1)
+        fig.add_hline(y=synthesis["tp2"], line_dash="dot", line_color="#c084fc", annotation_text=f"TP2 Measured Move (${synthesis['tp2']:.2f})", row=1, col=1)
+
+    fig.add_hline(y=raw_stats['liq_above'], line_dash="dash", line_color="#64748b", annotation_text="Liquidity Above", row=1, col=1)
+    fig.add_hline(y=raw_stats['liq_below'], line_dash="dash", line_color="#64748b", annotation_text="Liquidity Below", row=1, col=1)
     vol_colors = ['#00e676' if row['Close'] >= row['Open'] else '#ff5252' for _, row in df.iterrows()]
     fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=vol_colors, name='Volume'), row=2, col=1)
-    fig.update_layout(template="plotly_dark", height=480, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10))
+    fig.update_layout(template="plotly_dark", height=490, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10))
     st.plotly_chart(fig, use_container_width=True)
 
-    # Execution Plan Cards
+    # Execution Plan Cards with Multi-TP Targets
     st.markdown(f"##### DYNAMIC EXECUTION SETUP • {synthesis['setup_type']}")
-    s1, s2, s3 = st.columns(3)
+    s1, s2, s3, s4 = st.columns(4)
     s1.markdown(f'<div class="card-box"><div class="metric-title-blue">ENTRY ZONE</div><div class="metric-value">{synthesis["entry_zone"]}</div><div class="metric-sub">Calibrated pullbacks</div></div>', unsafe_allow_html=True)
-    s2.markdown(f'<div class="card-box"><div class="metric-title-blue">DYNAMIC STOP-LOSS</div><div class="metric-value">${synthesis["stop_loss"]:.2f}</div><div class="metric-sub">Flow-adjusted safety anchor</div></div>', unsafe_allow_html=True)
-    s3.markdown(f'<div class="card-box"><div class="metric-title-blue">TARGET</div><div class="metric-value">${synthesis["target"]:.2f}</div><div class="metric-sub">Institutional liquidity objective</div></div>', unsafe_allow_html=True)
+    s2.markdown(f'<div class="card-box"><div class="metric-title-blue">STRUCTURE STOP-LOSS</div><div class="metric-value">${synthesis["stop_loss"]:.2f}</div><div class="metric-sub">Beyond Spring / Ice pivot</div></div>', unsafe_allow_html=True)
+    s3.markdown(f'<div class="card-box"><div class="metric-title-blue">TP1 / TP2 (MEASURED MOVE)</div><div class="metric-value">${synthesis["tp1"]:.2f} / ${synthesis["tp2"]:.2f}</div><div class="metric-sub">1R Scalp & 2R Measured Move</div></div>', unsafe_allow_html=True)
+    s4.markdown(f'<div class="card-box"><div class="metric-title-blue">TP3 (EXPANSION)</div><div class="metric-value">${synthesis["tp3"]:.2f}</div><div class="metric-sub">Shift to Breakeven after TP1</div></div>', unsafe_allow_html=True)
+
+    # Wyckoff Range Engine Advanced Dashboard
+    if wyckoff_data:
+        st.markdown(f"##### 🏛️ WYCKOFF RANGE ENGINE • {wyckoff_data.get('schematic', 'RANGE ANALYSIS')}")
+        w1, w2, w3, w4 = st.columns(4)
+        w1.markdown(f'<div class="card-box"><div class="metric-title-blue">CURRENT PHASE</div><div style="font-weight:700; color:#38bdf8; font-size:1.1rem;">{wyckoff_data.get("phase", "Phase A")}</div><div class="metric-sub">Structure progression</div></div>', unsafe_allow_html=True)
+        w2.markdown(f'<div class="card-box"><div class="metric-title-blue">MEASURED MOVE TARGET</div><div class="metric-value">${wyckoff_data.get("measured_move", 0.0):.2f}</div><div class="metric-sub">Range width projection</div></div>', unsafe_allow_html=True)
+        w3.markdown(f'<div class="card-box"><div class="metric-title-blue">SPRING / CLIMAX QUALITY</div><div class="metric-value">{wyckoff_data.get("spring_score", wyckoff_data.get("utad_score", 75))} <span style="font-size:0.9rem; color:#94a3b8;">/ 100</span></div><div class="metric-sub">Volume effort & recovery speed</div></div>', unsafe_allow_html=True)
+        w4.markdown(f'<div class="card-box"><div class="metric-title-blue">TRADING RANGE WIDTH</div><div class="metric-value">${wyckoff_data.get("tr_height", 0.0):.2f}</div><div class="metric-sub">Ice: ${wyckoff_data.get("tr_low", 0)} • Creek: ${wyckoff_data.get("tr_high", 0)}</div></div>', unsafe_allow_html=True)
+
+        # Event Confirmation Checklist
+        cl_items = wyckoff_data.get("checklist", {})
+        chk_html = '<div class="card-box"><div class="metric-title-blue" style="margin-bottom:8px;">WYCKOFF STRUCTURAL CHECKLIST</div><div style="display:flex; flex-wrap:wrap; gap:12px;">'
+        for k, v in cl_items.items():
+            badge_icon = "🟢 [CONFIRMED]" if v else "⚪ [PENDING]"
+            b_c = "#34d399" if v else "#94a3b8"
+            chk_html += f'<div style="font-size:0.85rem; color:{b_c};">{badge_icon} <b>{k}</b></div>'
+        chk_html += '</div></div>'
+        st.markdown(chk_html, unsafe_allow_html=True)
 
     # Reasoning Breakdown
     st.markdown("##### EVIDENCE & CONFLUENCE REASONING")
@@ -493,7 +568,7 @@ if raw_stats:
     for item in raw_stats['tech_reasoning']:
         r_box += f'<div style="margin-bottom:4px; font-size:0.88rem; color:#93c5fd;">&bull; [Technicals] {item}</div>'
     for item in synthesis['notes']:
-        r_box += f'<div style="margin-bottom:4px; font-size:0.88rem; color:#fef08a;">&bull; [Data Feeds] {item}</div>'
+        r_box += f'<div style="margin-bottom:4px; font-size:0.88rem; color:#fef08a;">&bull; [Data Feeds & Wyckoff] {item}</div>'
     r_box += '</div>'
     st.markdown(r_box, unsafe_allow_html=True)
 

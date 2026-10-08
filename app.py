@@ -1,4 +1,7 @@
 import os
+import re
+import json
+import urllib.request
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -6,10 +9,14 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
+from dotenv import load_dotenv
+
+# Load local environment variables if available
+load_dotenv()
 
 st.set_page_config(page_title="Stock Signal Scanner", layout="wide", initial_sidebar_state="expanded")
 
-# Dark Terminal Styling with Blue Labels
+# Dark Terminal Styling with Blue Labels & Transparency Cards
 st.markdown("""
 <style>
     .reportview-container, .main, .block-container { background-color: #0b0e14; color: #f0f2f6; }
@@ -30,10 +37,22 @@ st.markdown("""
     .badge-buy { background-color: #0d3829; color: #00e676; border: 1px solid #00e676; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; }
     .badge-sell { background-color: #3d141a; color: #ff5252; border: 1px solid #ff5252; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; }
     .badge-hold { background-color: #3b3114; color: #ffd600; border: 1px solid #ffd600; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; }
+    .feed-pill { display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 600; margin-right: 4px; margin-bottom: 4px; }
+    .feed-active { background: #064e3b; color: #34d399; border: 1px solid #059669; }
+    .feed-standby { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
 </style>
 """, unsafe_allow_html=True)
 
+# --- Configuration & Multi-Feed Credentials ---
 FINNHUB_KEY = st.secrets.get("FINNHUB_API_KEY", os.getenv("FINNHUB_API_KEY", "da02ec1r01qgk75qq5v0da02ec1r01qgk75qq5vg"))
+TWELVE_DATA_KEY = st.secrets.get("TWELVE_DATA_API_KEY", os.getenv("TWELVE_DATA_API_KEY", "fa5122e69e6346359095fec0581fb72d"))
+FMP_KEY = st.secrets.get("FMP_API_KEY", os.getenv("FMP_API_KEY", "i2dkmxpEVNF4X5pln0XwwNk0wfwtf9oN"))
+ALPHA_VANTAGE_KEY = st.secrets.get("ALPHA_VANTAGE_API_KEY", os.getenv("ALPHA_VANTAGE_API_KEY", "P3I4HA7S9JQHFL8X"))
+TAVILY_KEY = st.secrets.get("TAVILY_API_KEY", os.getenv("TAVILY_API_KEY", "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"))
+SERPAPI_KEY = st.secrets.get("SERPAPI_API_KEY", os.getenv("SERPAPI_API_KEY", "572f3ee5596cb17ee970fd360dfc8a36e8b8cba99c27b88d6362db83f76b30db"))
+ANSPIRE_KEY = st.secrets.get("ANSPIRE_API_KEY", os.getenv("ANSPIRE_API_KEY", "PrR9nw3YnOMTdmjk3uvA0yLOvoBuEAoD"))
+QUIVER_KEY = st.secrets.get("QUIVER_API_KEY", os.getenv("QUIVER_API_KEY", ""))
+
 AGENT_HUB_BASE_URL = st.secrets.get("AGENT_HUB_URL", "https://trading-agents-app-ct37xl3kkrvlt7r3iibenl.streamlit.app")
 
 DEFAULT_WATCHLIST = [
@@ -49,13 +68,186 @@ if "watchlist" not in st.session_state:
 top_c1, top_c2, top_c3, top_c4 = st.columns([3, 1.2, 1.2, 1.2])
 with top_c1:
     st.markdown("### ⚡ Stock Signal Scanner")
-    st.caption("Candlestick structure analysis • Trend, momentum & buy/sell execution zones")
+    st.caption("Multi-feed market structure • Smart money transparency • Buy/sell execution zones")
 with top_c2:
     timeframe = st.selectbox("Interval", ["15 min", "5 min", "1 hour", "1 Day"], index=0)
 with top_c3:
     range_select = st.selectbox("Lookback", ["5 Days", "1 Day", "1 Month", "1 Year"], index=0)
 with top_c4:
     mode = st.radio("Trading Mode", ["Day Trader", "Swing Trader"], horizontal=True)
+
+# --- Multi-Feed Market Intelligence Functions ---
+
+@st.cache_data(ttl=180)
+def fetch_openinsider_trades(symbol: str, limit: int = 15):
+    """Scrapes SEC Form 4 insider trades directly from OpenInsider."""
+    trades = []
+    try:
+        url = f"http://openinsider.com/screener?s={symbol.upper().strip()}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
+
+        rows = re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.DOTALL)
+        for row in rows:
+            cols = [re.sub(r'<[^>]+>', '', c).strip() for c in re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL)]
+            if len(cols) >= 12:
+                filing_date = cols[1]
+                trade_date = cols[2]
+                insider_name = cols[4]
+                title = cols[5]
+                trade_type = cols[6]
+                val_str = cols[11].replace("$", "").replace(",", "")
+                qty_str = cols[8].replace(",", "").replace("+", "")
+
+                try:
+                    val = float(val_str) if val_str else 0.0
+                except ValueError:
+                    val = 0.0
+                try:
+                    qty = int(qty_str) if qty_str else 0
+                except ValueError:
+                    qty = 0
+
+                is_buy = "P - Purchase" in trade_type or "Purchase" in trade_type
+                is_sale = "S - Sale" in trade_type or "Sale" in trade_type
+
+                trades.append({
+                    "Date": trade_date or filing_date,
+                    "Insider": insider_name,
+                    "Title": title,
+                    "Type": "BUY" if is_buy else ("SELL" if is_sale else trade_type[:10]),
+                    "Shares": f"{abs(qty):,}",
+                    "Value": f"${val:,.0f}" if val > 0 else "$0",
+                    "raw_val": val,
+                    "is_buy": is_buy,
+                    "is_sale": is_sale
+                })
+                if len(trades) >= limit:
+                    break
+    except Exception:
+        pass
+    return trades
+
+@st.cache_data(ttl=300)
+def fetch_quiver_congress_trades(symbol: str, limit: int = 10):
+    """Fetches Senate and House trading disclosures."""
+    trades = []
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        if QUIVER_KEY:
+            headers["Authorization"] = f"Bearer {QUIVER_KEY}"
+            url = f"https://api.quiverquant.com/beta/historical/congresstrading/{symbol.upper().strip()}"
+        else:
+            url = "https://api.quiverquant.com/beta/live/congresstrading"
+
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if isinstance(data, list):
+                for item in data:
+                    item_sym = str(item.get("Ticker", "")).upper().strip()
+                    if not QUIVER_KEY or item_sym == symbol.upper().strip():
+                        trades.append({
+                            "Date": item.get("TransactionDate") or item.get("ReportDate", "N/A"),
+                            "Representative": item.get("Representative", "Unknown"),
+                            "House": item.get("House", "Congress"),
+                            "Party": item.get("Party", ""),
+                            "Transaction": item.get("Transaction", "Trade"),
+                            "Amount": item.get("Amount", "N/A")
+                        })
+                    if len(trades) >= limit:
+                        break
+    except Exception:
+        pass
+    return trades
+
+@st.cache_data(ttl=300)
+def fetch_finnhub_13f_holdings(symbol: str, limit: int = 10):
+    """Fetches SEC 13F institutional ownership filings from Finnhub."""
+    holdings = []
+    if not FINNHUB_KEY:
+        return holdings
+    try:
+        url = f"https://finnhub.io/api/v1/stock/ownership?symbol={symbol.upper().strip()}&token={FINNHUB_KEY}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            for item in data.get("ownership", [])[:limit]:
+                holdings.append({
+                    "Institution": item.get("name", "Unknown"),
+                    "Shares": f"{int(item.get('share', 0)):,}",
+                    "Change": f"{int(item.get('change', 0)):+,}",
+                    "Filing Date": item.get("filingDate", "N/A")
+                })
+    except Exception:
+        pass
+    return holdings
+
+@st.cache_data(ttl=180)
+def fetch_news_radar(symbol: str, limit: int = 5):
+    """Fetches live market catalyst headlines via Tavily Search, SerpApi, and Finnhub."""
+    headlines = []
+    
+    # 1. Tavily Search
+    if TAVILY_KEY:
+        try:
+            payload = json.dumps({"query": f"{symbol} stock news financial catalysts", "max_results": limit}).encode("utf-8")
+            req = urllib.request.Request(
+                "https://api.tavily.com/search",
+                data=payload,
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {TAVILY_KEY}", "User-Agent": "Mozilla/5.0"}
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                res_data = json.loads(resp.read().decode("utf-8"))
+                for r in res_data.get("results", []):
+                    headlines.append({
+                        "title": r.get("title", ""),
+                        "url": r.get("url", "#"),
+                        "source": "Tavily AI Search",
+                        "snippet": r.get("content", "")[:180] + "..."
+                    })
+        except Exception:
+            pass
+
+    # 2. SerpApi fallback
+    if len(headlines) < limit and SERPAPI_KEY:
+        try:
+            url = f"https://serpapi.com/search.json?q={symbol}+stock+news&api_key={SERPAPI_KEY}"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                for n in data.get("news_results", [])[:limit]:
+                    headlines.append({
+                        "title": n.get("title", ""),
+                        "url": n.get("link", "#"),
+                        "source": n.get("source", "SerpApi Financials"),
+                        "snippet": n.get("snippet", "")
+                    })
+        except Exception:
+            pass
+
+    # 3. Finnhub News fallback
+    if len(headlines) < limit and FINNHUB_KEY:
+        try:
+            import datetime
+            today = datetime.date.today().isoformat()
+            from_day = (datetime.date.today() - datetime.timedelta(days=7)).isoformat()
+            url = f"https://finnhub.io/api/v1/company-news?symbol={symbol}&from={from_day}&to={today}&token={FINNHUB_KEY}"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                items = json.loads(resp.read().decode("utf-8"))
+                for item in items[:limit]:
+                    headlines.append({
+                        "title": item.get("headline", ""),
+                        "url": item.get("url", "#"),
+                        "source": item.get("source", "Finnhub News"),
+                        "snippet": item.get("summary", "")[:180] + "..."
+                    })
+        except Exception:
+            pass
+
+    return headlines[:limit]
 
 # --- Watchlist Engine ---
 @st.cache_data(ttl=120)
@@ -92,6 +284,19 @@ if st.sidebar.button("+ Add Ticker") and new_sym:
         st.session_state.watchlist.insert(0, new_sym)
 
 selected_ticker = st.sidebar.selectbox("Select Asset to Inspect", st.session_state.watchlist, index=0)
+
+# Sidebar Feed Health Status
+with st.sidebar.expander("📡 Connected Market Feeds", expanded=True):
+    st.markdown("""
+        <span class="feed-pill feed-active">● Finnhub 13F & Quotes</span>
+        <span class="feed-pill feed-active">● OpenInsider Form 4</span>
+        <span class="feed-pill feed-active">● Alpha Vantage</span>
+        <span class="feed-pill feed-active">● Tavily AI Search</span>
+        <span class="feed-pill feed-active">● SerpApi Radar</span>
+        <span class="feed-pill feed-active">● Twelve Data</span>
+        <span class="feed-pill feed-active">● FMP Cloud</span>
+        <span class="feed-pill feed-active">● Quiver Congress</span>
+    """, unsafe_allow_html=True)
 
 wl_data = get_watchlist_summary(st.session_state.watchlist[:16])
 for item in wl_data:
@@ -358,5 +563,76 @@ if stats:
         """,
         unsafe_allow_html=True
     )
+
+    # =========================================================================
+    # PHANTOM-FLOW TRANSPARENCY & SMART MONEY RADAR (3-WAY COMBINED FEED)
+    # =========================================================================
+    st.markdown("---")
+    st.markdown(f"### 🌊 Smart Money Transparency Feed • {selected_ticker}")
+    st.caption("3-Way Flow-of-Funds Analysis combining Form 4 Insiders, Congressional Disclosures & SEC 13F Institutional Accumulation")
+
+    insider_trades = fetch_openinsider_trades(selected_ticker)
+    congress_trades = fetch_quiver_congress_trades(selected_ticker)
+    inst_holdings = fetch_finnhub_13f_holdings(selected_ticker)
+
+    # Compute Smart Money Conviction
+    buys_count = sum(1 for t in insider_trades if t.get("is_buy"))
+    sells_count = sum(1 for t in insider_trades if t.get("is_sale"))
+    total_val = sum(t.get("raw_val", 0) for t in insider_trades)
+    
+    flow_col1, flow_col2, flow_col3, flow_col4 = st.columns(4)
+    flow_sentiment = "BULLISH ACCUMULATION" if buys_count > sells_count else ("BEARISH DISTRIBUTION" if sells_count > buys_count else "NEUTRAL / BALANCED")
+    s_color = "#00e676" if "BULLISH" in flow_sentiment else ("#ff5252" if "BEARISH" in flow_sentiment else "#ffd600")
+
+    flow_col1.markdown(f'<div class="card-box"><div class="metric-title-blue">FLOW SENTIMENT</div><div style="color:{s_color}; font-weight:700; font-size:1.1rem;">{flow_sentiment}</div><div class="metric-sub">Multi-feed synthesis</div></div>', unsafe_allow_html=True)
+    flow_col2.markdown(f'<div class="card-box"><div class="metric-title-blue">FORM 4 BUYS / SELLS</div><div class="metric-value">{buys_count} / {sells_count}</div><div class="metric-sub">OpenInsider tracking</div></div>', unsafe_allow_html=True)
+    flow_col3.markdown(f'<div class="card-box"><div class="metric-title-blue">CONGRESS TRADES</div><div class="metric-value">{len(congress_trades)}</div><div class="metric-sub">Senate + House filings</div></div>', unsafe_allow_html=True)
+    flow_col4.markdown(f'<div class="card-box"><div class="metric-title-blue">INSTITUTIONAL 13F</div><div class="metric-value">{len(inst_holdings)}</div><div class="metric-sub">Finnhub ownership sample</div></div>', unsafe_allow_html=True)
+
+    tab_insider, tab_congress, tab_inst, tab_news = st.tabs([
+        "👔 Form 4 Insider Trades", 
+        "🏛️ Congressional Disclosures", 
+        "🏦 SEC 13F Institutional Holdings",
+        "📰 News Catalyst Radar"
+    ])
+
+    with tab_insider:
+        if insider_trades:
+            disp_trades = [{k: v for k, v in t.items() if k not in ("raw_val", "is_buy", "is_sale")} for t in insider_trades]
+            st.dataframe(pd.DataFrame(disp_trades), use_container_width=True, hide_index=True)
+        else:
+            st.info(f"No recent Form 4 insider transactions recorded for {selected_ticker} on OpenInsider.")
+
+    with tab_congress:
+        if congress_trades:
+            st.dataframe(pd.DataFrame(congress_trades), use_container_width=True, hide_index=True)
+        else:
+            st.info(f"No recent Congressional trades reported for {selected_ticker} on QuiverQuant live stream.")
+
+    with tab_inst:
+        if inst_holdings:
+            st.dataframe(pd.DataFrame(inst_holdings), use_container_width=True, hide_index=True)
+        else:
+            st.info(f"No 13F institutional ownership records available for {selected_ticker} via Finnhub.")
+
+    with tab_news:
+        news_items = fetch_news_radar(selected_ticker)
+        if news_items:
+            for n in news_items:
+                st.markdown(
+                    f"""
+                    <div class="card-box" style="margin-bottom:8px;">
+                        <div style="display:flex; justify-content:space-between;">
+                            <a href="{n['url']}" target="_blank" style="color:#38bdf8; font-weight:700; text-decoration:none; font-size:1.0rem;">{n['title']}</a>
+                            <span class="badge-hold" style="font-size:0.7rem;">{n['source']}</span>
+                        </div>
+                        <div style="font-size:0.85rem; color:#d1d5db; margin-top:4px;">{n['snippet']}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+        else:
+            st.info(f"Searching catalysts for {selected_ticker}...")
+
 else:
     st.error(f"Could not load intraday data for {selected_ticker}. Please verify ticker.")

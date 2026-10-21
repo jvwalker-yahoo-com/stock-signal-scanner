@@ -53,6 +53,7 @@ TAVILY_KEY = get_secret("TAVILY_API_KEY", "tvly-dev-mYvCc-g8LxiaX81dHMusicrizVWM
 SERPAPI_KEY = get_secret("SERPAPI_API_KEY", "572f3ee5596cb17ee970fd360dfc8a36e8b8cba99c27b88d6362db83f76b30db")
 ANSPIRE_KEY = get_secret("ANSPIRE_API_KEY", "PrR9nw3YnOMTdmjk3uvA0yLOvoBuEAoD")
 QUIVER_KEY = get_secret("QUIVER_API_KEY", "")
+OPENROUTER_KEY = get_secret("OPENROUTER_API_KEY", "")
 
 AGENT_HUB_BASE_URL = get_secret("AGENT_HUB_URL", "https://trading-agents-app-ct37xl3kkrvlt7r3iibenl.streamlit.app")
 
@@ -561,6 +562,8 @@ if raw_stats:
         st.markdown(f"# ${raw_stats['price']:.2f}")
     with h2:
         target_link = f"{AGENT_HUB_BASE_URL}?ticker={selected_ticker}"
+        if OPENROUTER_KEY:
+            target_link += f"&key={OPENROUTER_KEY}"
         st.markdown(f"""
             <a href="{target_link}" target="_blank" style="text-decoration:none;">
                 <button style="background: linear-gradient(135deg, #2563eb, #1d4ed8); color: white; border: none; padding: 12px 18px; border-radius: 8px; font-weight: 700; cursor: pointer; margin-top: 14px; width: 100%; font-size: 0.95rem;">

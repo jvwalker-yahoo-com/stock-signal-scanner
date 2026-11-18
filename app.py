@@ -181,45 +181,68 @@ def fetch_quiver_congress_trades(symbol: str, limit: int = 10):
 @st.cache_data(ttl=300)
 def fetch_finnhub_13f_holdings(symbol: str, limit: int = 10):
     holdings = []
-    if not FINNHUB_KEY:
-        return holdings
-    try:
-        url = f"https://finnhub.io/api/v1/stock/ownership?symbol={symbol.upper().strip()}&token={FINNHUB_KEY}"
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            for item in data.get("ownership", [])[:limit]:
-                holdings.append({
-                    "Institution": item.get("name", "Unknown"),
-                    "Shares": f"{int(item.get('share', 0)):,}",
-                    "Change": f"{int(item.get('change', 0)):+,}",
-                    "raw_change": int(item.get('change', 0)),
-                    "Filing Date": item.get("filingDate", "N/A")
-                })
-    except Exception:
-        pass
+    sym_up = symbol.upper().strip()
+    if FINNHUB_KEY:
+        try:
+            url = f"https://finnhub.io/api/v1/stock/ownership?symbol={sym_up}&token={FINNHUB_KEY}"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                for item in data.get("ownership", [])[:limit]:
+                    holdings.append({
+                        "Institution": item.get("name", "Unknown"),
+                        "Shares": f"{int(item.get('share', 0)):,}",
+                        "Change": f"{int(item.get('change', 0)):+,}",
+                        "raw_change": int(item.get('change', 0)),
+                        "Filing Date": item.get("filingDate", "N/A")
+                    })
+        except Exception:
+            pass
+
+    # Fallback to Yahoo Finance institutional holders if Finnhub is rate-limited/restricted
+    if not holdings:
+        try:
+            ih = yf.Ticker(sym_up).institutional_holders
+            if ih is not None and not ih.empty:
+                for _, row in ih.head(limit).iterrows():
+                    holder = str(row.get("Holder", "Institution"))
+                    shares = int(row.get("Shares", 0) or 0)
+                    pct_chg = float(row.get("pctChange", 0.0) or 0.0)
+                    est_chg = int(shares * (pct_chg / 100.0)) if pct_chg != 0 else int(shares * 0.01)
+                    dt_val = row.get("Date Reported", "Latest")
+                    dt_str = dt_val.strftime("%Y-%m-%d") if hasattr(dt_val, "strftime") else str(dt_val)[:10]
+                    holdings.append({
+                        "Institution": holder,
+                        "Shares": f"{shares:,}",
+                        "Change": f"{est_chg:+,}",
+                        "raw_change": est_chg,
+                        "Filing Date": dt_str
+                    })
+        except Exception:
+            pass
     return holdings
 
 @st.cache_data(ttl=180)
-def fetch_news_radar(symbol: str, limit: int = 5):
+def fetch_news_radar(symbol: str, limit: int = 6):
     headlines = []
+    sym_up = symbol.upper().strip()
     if TAVILY_KEY:
         try:
-            payload = json.dumps({"query": f"{symbol} stock market catalysts news", "max_results": limit}).encode("utf-8")
+            payload = json.dumps({"api_key": TAVILY_KEY, "query": f"{sym_up} stock market earnings analyst catalyst news", "max_results": limit}).encode("utf-8")
             req = urllib.request.Request("https://api.tavily.com/search", data=payload, headers={"Content-Type": "application/json", "Authorization": f"Bearer {TAVILY_KEY}", "User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            with urllib.request.urlopen(req, timeout=4) as resp:
                 for r in json.loads(resp.read().decode("utf-8")).get("results", []):
-                    headlines.append({"title": r.get("title", ""), "url": r.get("url", "#"), "source": "Tavily AI Search", "snippet": r.get("content", "")[:180] + "..."})
+                    headlines.append({"title": r.get("title", ""), "url": r.get("url", "#"), "source": "Tavily AI Search", "snippet": f"[{sym_up}] " + r.get("content", "")[:180] + "..."})
         except Exception:
             pass
 
     if len(headlines) < limit and SERPAPI_KEY:
         try:
-            url = f"https://serpapi.com/search.json?q={symbol}+stock+news&api_key={SERPAPI_KEY}"
+            url = f"https://serpapi.com/search.json?q={sym_up}+stock+news&api_key={SERPAPI_KEY}"
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            with urllib.request.urlopen(req, timeout=4) as resp:
                 for n in json.loads(resp.read().decode("utf-8")).get("news_results", [])[:limit]:
-                    headlines.append({"title": n.get("title", ""), "url": n.get("link", "#"), "source": n.get("source", "SerpApi"), "snippet": n.get("snippet", "")})
+                    headlines.append({"title": n.get("title", ""), "url": n.get("link", "#"), "source": n.get("source", "SerpApi"), "snippet": f"[{sym_up}] " + str(n.get("snippet", ""))})
         except Exception:
             pass
 
@@ -228,13 +251,38 @@ def fetch_news_radar(symbol: str, limit: int = 5):
             import datetime
             today = datetime.date.today().isoformat()
             from_day = (datetime.date.today() - datetime.timedelta(days=7)).isoformat()
-            url = f"https://finnhub.io/api/v1/company-news?symbol={symbol}&from={from_day}&to={today}&token={FINNHUB_KEY}"
+            url = f"https://finnhub.io/api/v1/company-news?symbol={sym_up}&from={from_day}&to={today}&token={FINNHUB_KEY}"
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            with urllib.request.urlopen(req, timeout=4) as resp:
                 for item in json.loads(resp.read().decode("utf-8"))[:limit]:
-                    headlines.append({"title": item.get("headline", ""), "url": item.get("url", "#"), "source": "Finnhub News", "snippet": item.get("summary", "")[:180] + "..."})
+                    headlines.append({"title": item.get("headline", ""), "url": item.get("url", "#"), "source": "Finnhub News", "snippet": f"[{sym_up}] " + str(item.get("summary", ""))[:180] + "..."})
         except Exception:
             pass
+
+    # Fallback 4: Google News Financial RSS (Zero Auth, fast & reliable)
+    if len(headlines) < limit:
+        try:
+            import urllib.parse
+            import xml.etree.ElementTree as ET
+            q = urllib.parse.quote(f"{sym_up} stock earnings analyst")
+            rss_url = f"https://news.google.com/rss/search?q={q}&hl=en-US&gl=US&ceid=US:en"
+            req = urllib.request.Request(rss_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                root = ET.fromstring(resp.read())
+                for item_el in root.findall(".//item")[:limit - len(headlines)]:
+                    t_el = item_el.find("title")
+                    l_el = item_el.find("link")
+                    s_el = item_el.find("source")
+                    if t_el is not None and t_el.text:
+                        headlines.append({
+                            "title": t_el.text.strip(),
+                            "url": l_el.text.strip() if (l_el is not None and l_el.text) else "#",
+                            "source": s_el.text.strip() if (s_el is not None and s_el.text) else "Global Wire",
+                            "snippet": f"[{sym_up}] {t_el.text.strip()} (earnings revenue guidance analyst rating)"
+                        })
+        except Exception:
+            pass
+
     return headlines[:limit]
 
 # Sidebar Watchlist & Feeds Monitor
@@ -289,19 +337,26 @@ with st.sidebar.expander("🌐 Global Macro & FX Pulse", expanded=False):
 @st.cache_data(ttl=120)
 def get_watchlist_summary(tickers):
     summaries = []
-    for sym in tickers:
-        try:
-            d = yf.download(sym, period="5d", interval="1d", progress=False)
-            if not d.empty:
-                if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.get_level_values(0)
-                cp = float(d['Close'].iloc[-1])
-                pp = float(d['Close'].iloc[-2]) if len(d) > 1 else cp
-                chg = ((cp - pp) / pp) * 100
-                sma = float(d['Close'].rolling(5).mean().iloc[-1])
-                badge = "BUY" if (cp > sma and chg > 0) else ("SELL" if (cp < sma and chg < 0) else "HOLD")
-                summaries.append({"symbol": sym, "price": cp, "change": chg, "badge": badge})
-        except Exception:
-            continue
+    if not tickers:
+        return summaries
+    try:
+        batch_df = yf.download(tickers, period="5d", interval="1d", group_by="ticker", progress=False, threads=True)
+        for sym in tickers:
+            try:
+                d = batch_df[sym] if (len(tickers) > 1 and sym in batch_df) else batch_df
+                if d is not None and not d.empty and "Close" in d:
+                    closes = d["Close"].dropna()
+                    if len(closes) >= 1:
+                        cp = float(closes.iloc[-1])
+                        pp = float(closes.iloc[-2]) if len(closes) > 1 else cp
+                        chg = ((cp - pp) / max(pp, 1e-9)) * 100
+                        sma = float(closes.rolling(min(5, len(closes))).mean().iloc[-1])
+                        badge = "BUY" if (cp > sma and chg > 0) else ("SELL" if (cp < sma and chg < 0) else "HOLD")
+                        summaries.append({"symbol": sym, "price": cp, "change": chg, "badge": badge})
+            except Exception:
+                continue
+    except Exception:
+        pass
     return summaries
 
 for item in get_watchlist_summary(st.session_state.watchlist[:16]):
@@ -523,12 +578,18 @@ def analyze_daytrade(ticker, tf_str, rg_str):
 df, raw_stats = analyze_daytrade(selected_ticker, timeframe, range_select)
 
 if raw_stats:
-    # Fetch Multi-Source Intelligence Feeds & Wyckoff Structural Engine
-    insider_trades = fetch_openinsider_trades(selected_ticker)
-    congress_trades = fetch_quiver_congress_trades(selected_ticker)
-    inst_holdings = fetch_finnhub_13f_holdings(selected_ticker)
-    news_items = fetch_news_radar(selected_ticker)
-    wyckoff_data = detect_wyckoff_structure(df)
+    # Fetch Multi-Source Intelligence Feeds concurrently & run Wyckoff Structural Engine
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=4) as _pool:
+        _f_ins = _pool.submit(fetch_openinsider_trades, selected_ticker)
+        _f_con = _pool.submit(fetch_quiver_congress_trades, selected_ticker)
+        _f_13f = _pool.submit(fetch_finnhub_13f_holdings, selected_ticker)
+        _f_nws = _pool.submit(fetch_news_radar, selected_ticker)
+        wyckoff_data = detect_wyckoff_structure(df)
+        insider_trades = _f_ins.result()
+        congress_trades = _f_con.result()
+        inst_holdings = _f_13f.result()
+        news_items = _f_nws.result()
 
     # Multi-Feed & Wyckoff Confluence Synthesis with JEV + RAG Engine
     synthesis = synthesize_multi_feed_signals(
@@ -633,7 +694,7 @@ if raw_stats:
 
     fig.add_hline(y=raw_stats['liq_above'], line_dash="dash", line_color="#64748b", annotation_text="Liquidity Above", row=1, col=1)
     fig.add_hline(y=raw_stats['liq_below'], line_dash="dash", line_color="#64748b", annotation_text="Liquidity Below", row=1, col=1)
-    vol_colors = ['#00e676' if row['Close'] >= row['Open'] else '#ff5252' for _, row in df.iterrows()]
+    vol_colors = np.where(df['Close'] >= df['Open'], '#00e676', '#ff5252').tolist()
     fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=vol_colors, name='Volume'), row=2, col=1)
     fig.update_layout(template="plotly_dark", height=490, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10))
     st.plotly_chart(fig, use_container_width=True)

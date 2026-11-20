@@ -289,8 +289,10 @@ def fetch_news_radar(symbol: str, limit: int = 6):
 st.sidebar.markdown("### WATCHLIST")
 new_sym = st.sidebar.text_input("Add Ticker", "").upper().strip()
 if st.sidebar.button("+ Add Ticker") and new_sym:
-    if new_sym not in st.session_state.watchlist:
-        st.session_state.watchlist.insert(0, new_sym)
+    for sym in reversed([s.strip() for s in re.split(r"[,\s]+", new_sym) if s.strip()]):
+        if sym in st.session_state.watchlist:
+            st.session_state.watchlist.remove(sym)
+        st.session_state.watchlist.insert(0, sym)
 
 selected_ticker = st.sidebar.selectbox("Select Asset to Inspect", st.session_state.watchlist, index=0)
 
@@ -359,7 +361,7 @@ def get_watchlist_summary(tickers):
         pass
     return summaries
 
-for item in get_watchlist_summary(st.session_state.watchlist[:16]):
+for item in get_watchlist_summary(st.session_state.watchlist):
     b_class = "badge-buy" if "BUY" in item["badge"] else ("badge-sell" if "SELL" in item["badge"] else "badge-hold")
     color = "#00e676" if item["change"] >= 0 else "#ff5252"
     sign = "+" if item["change"] >= 0 else ""

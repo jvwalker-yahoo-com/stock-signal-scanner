@@ -179,3 +179,10 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+
+# graphify local cache and machine-specific sidecars
+graphify-out/cache/
+graphify-out/.graphify_*
